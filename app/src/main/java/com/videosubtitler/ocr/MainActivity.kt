@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.videosubtitler.ocr.ui.FetchingScreen
 import com.videosubtitler.ocr.ui.HomeScreen
 import com.videosubtitler.ocr.ui.ProcessingScreen
 import com.videosubtitler.ocr.ui.ResultScreen
@@ -35,6 +36,7 @@ class MainActivity : ComponentActivity() {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
             when (val current = state) {
                 is UiState.Idle -> HomeScreen(onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) })
+                is UiState.Fetching -> FetchingScreen(message = current.message)
                 is UiState.Processing -> ProcessingScreen(processed = current.processed, total = current.total)
                 is UiState.Result -> ResultScreen(
                     videoUri = current.videoUri,
@@ -55,15 +57,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent) {
-        if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("video/") == true) {
-            val sharedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        if (intent.action != Intent.ACTION_SEND) return
+
+        when {
+            intent.type?.startsWith("video/") == true -> {
+                val sharedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                sharedUri?.let { viewModel.processVideo(it) }
             }
-            if (sharedUri != null) {
-                viewModel.processVideo(sharedUri)
+            intent.type == "text/plain" -> {
+                val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                sharedText?.let { viewModel.processSharedText(it) }
             }
         }
     }

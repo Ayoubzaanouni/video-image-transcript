@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.videosubtitler.ocr.domain.CueBuilder
 import com.videosubtitler.ocr.domain.FrameExtractor
+import com.videosubtitler.ocr.domain.InstagramVideoResolver
 import com.videosubtitler.ocr.domain.OcrEngine
 import com.videosubtitler.ocr.domain.SrtWriter
 import com.videosubtitler.ocr.domain.TimedText
@@ -21,6 +22,7 @@ private const val FRAME_INTERVAL_MS = 500L
 
 sealed interface UiState {
     data object Idle : UiState
+    data class Fetching(val message: String) : UiState
     data class Processing(val processed: Int, val total: Int) : UiState
     data class Result(val videoUri: Uri, val cues: List<SubtitleCue>) : UiState
     data class Error(val message: String) : UiState
@@ -31,6 +33,8 @@ class TranscriptionViewModel(application: Application) : AndroidViewModel(applic
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val instagramResolver = InstagramVideoResolver()
+
     fun processVideo(uri: Uri) {
         viewModelScope.launch {
             _uiState.value = UiState.Processing(0, 0)
@@ -39,6 +43,30 @@ class TranscriptionViewModel(application: Application) : AndroidViewModel(applic
                 _uiState.value = UiState.Result(uri, cues)
             } catch (t: Throwable) {
                 _uiState.value = UiState.Error(t.message ?: "Failed to process video")
+            }
+        }
+    }
+
+    /** Handles a shared piece of text (e.g. an Instagram post/reel link from the share sheet). */
+    fun processSharedText(sharedText: String) {
+        viewModelScope.launch {
+            _uiState.value = UiState.Fetching("Looking for a video link…")
+            val url = instagramResolver.extractUrl(sharedText)
+            if (url == null) {
+                _uiState.value = UiState.Error("No link found in what was shared.")
+                return@launch
+            }
+            if (!instagramResolver.isInstagramUrl(url)) {
+                _uiState.value = UiState.Error("Only Instagram links are supported right now.")
+                return@launch
+            }
+            try {
+                _uiState.value = UiState.Fetching("Downloading video from Instagram…")
+                val context = getApplication<Application>()
+                val videoUri = withContext(Dispatchers.IO) { instagramResolver.downloadVideo(context, url) }
+                processVideo(videoUri)
+            } catch (t: Throwable) {
+                _uiState.value = UiState.Error(t.message ?: "Couldn't fetch that video.")
             }
         }
     }
