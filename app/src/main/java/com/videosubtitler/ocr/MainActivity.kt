@@ -35,7 +35,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
             when (val current = state) {
-                is UiState.Idle -> HomeScreen(onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) })
+                is UiState.Idle -> HomeScreen(
+                    onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) },
+                    onSubmitLink = { viewModel.processSharedText(it) },
+                )
                 is UiState.Fetching -> FetchingScreen(message = current.message)
                 is UiState.Processing -> ProcessingScreen(processed = current.processed, total = current.total)
                 is UiState.Result -> ResultScreen(
@@ -45,6 +48,7 @@ class MainActivity : ComponentActivity() {
                 )
                 is UiState.Error -> HomeScreen(
                     onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) },
+                    onSubmitLink = { viewModel.processSharedText(it) },
                     errorMessage = current.message,
                 )
             }
