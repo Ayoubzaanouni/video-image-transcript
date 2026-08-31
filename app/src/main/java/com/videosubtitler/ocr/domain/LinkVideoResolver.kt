@@ -3,6 +3,7 @@ package com.videosubtitler.ocr.domain
 import android.content.Context
 import android.net.Uri
 import android.text.Html
+import com.videosubtitler.ocr.extractor.InstagramExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -30,6 +31,10 @@ import java.util.concurrent.TimeUnit
  * is intentionally not supported: it exposes no direct file URL this way at all,
  * and reliably extracting one requires reverse-engineering YouTube's player
  * internals (what yt-dlp does), which is far more fragile and invasive than this.
+ *
+ * The Instagram page-JSON extraction ([InstagramExtractor]) is adapted from the
+ * open-source VidSnap project (GPLv3) — see NOTICE.md at the repo root. Because
+ * of that, this project is licensed under the GPLv3 as a whole (see LICENSE).
  */
 class LinkVideoResolver {
 
@@ -70,8 +75,14 @@ class LinkVideoResolver {
         }
 
     private fun fetchInstagramVideoUrl(postUrl: String, cookie: String?): String? {
-        val shortcode = extractInstagramShortcode(postUrl)
+        // Primary path: fetch the post page and pull the video URL out of its
+        // embedded JSON (window._sharedData / window.__additionalDataLoaded),
+        // same approach as VidSnap's Instagram.java extractor.
+        fetchHtml(postUrl, cookie)?.let { html ->
+            InstagramExtractor.extractVideoUrl(html)?.let { return unescape(it) }
+        }
 
+        val shortcode = extractInstagramShortcode(postUrl)
         if (cookie != null && shortcode != null) {
             fetchInstagramApiVideoUrl(shortcode, cookie)?.let { return it }
         }
@@ -82,6 +93,7 @@ class LinkVideoResolver {
         val embedUrl = toInstagramEmbedUrl(postUrl)
         if (embedUrl != null) {
             fetchHtml(embedUrl, cookie)?.let { html ->
+                InstagramExtractor.extractVideoUrl(html)?.let { return unescape(it) }
                 extractFirst(html, Regex("\"video_url\":\"([^\"]+)\""))?.let { return unescape(it) }
                 extractOgVideo(html)?.let { return it }
             }
