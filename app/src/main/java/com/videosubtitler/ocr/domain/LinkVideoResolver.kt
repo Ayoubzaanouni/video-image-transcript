@@ -7,22 +7,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
  * Best-effort resolver for a shared video post link (Instagram, TikTok, X/Twitter,
- * Facebook, Reddit, Vimeo, ...): fetches the public page and reads a direct video
- * URL out of it, then downloads that video locally so the existing frame/OCR
- * pipeline can run on it.
+ * Facebook, Reddit, Vimeo, ...): fetches the post and reads a direct video URL out
+ * of it, then downloads that video locally so the existing frame/OCR pipeline can
+ * run on it.
  *
- * This only works for public, non-login-walled content, relies on each site's page
- * markup staying stable, and is not an official API for any of these platforms —
- * it can stop working at any time if a site changes its page or blocks the request.
- * YouTube is intentionally not supported: it does not expose a direct file URL this
- * way, and reliably extracting one requires reverse-engineering YouTube's player
- * internals (what yt-dlp does), which is far more fragile and a clearer Terms of
- * Service violation than reading public page metadata.
+ * For most sites this reads the public `og:video` page metadata. Instagram no
+ * longer serves any content in its raw HTML (confirmed by direct testing: both the
+ * normal post page and the embed page return an empty client-rendered shell, and
+ * even the old unauthenticated private-API endpoints now redirect to a login wall)
+ * — so Instagram requires an [instagramCookie] from a real logged-in session,
+ * captured via [InstagramSessionStore] after explicit user consent, and uses
+ * Instagram's own authenticated media-info endpoint instead of scraping HTML.
+ *
+ * None of this is an official API for any of these platforms. It relies on each
+ * site's markup/endpoints staying stable and can stop working at any time. YouTube
+ * is intentionally not supported: it exposes no direct file URL this way at all,
+ * and reliably extracting one requires reverse-engineering YouTube's player
+ * internals (what yt-dlp does), which is far more fragile and invasive than this.
  */
 class LinkVideoResolver {
 
@@ -35,6 +42,8 @@ class LinkVideoResolver {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+    private val instagramAppId = "936619743392459" // Instagram's own public web-client app id
+
     /** Extracts the first http(s) URL found in shared share-sheet text. */
     fun extractUrl(sharedText: String): String? =
         Regex("https?://\\S+").find(sharedText)?.value
@@ -44,45 +53,74 @@ class LinkVideoResolver {
         return host.contains("youtube.com") || host.contains("youtu.be")
     }
 
-    suspend fun downloadVideo(context: Context, postUrl: String): Uri = withContext(Dispatchers.IO) {
-        if (isYouTubeUrl(postUrl)) {
-            error("YouTube links aren't supported. Try Instagram, TikTok, X/Twitter, Facebook, Reddit, or Vimeo instead.")
-        }
-        val host = Uri.parse(postUrl).host.orEmpty()
-        val videoUrl = if (host.contains("instagram.com")) {
-            fetchInstagramVideoUrl(postUrl)
-        } else {
-            fetchOgVideoUrl(postUrl)
-        } ?: error("Couldn't find a video on that link. The post may be private, expired, deleted, or not a video.")
-        downloadToCache(context, videoUrl)
-    }
+    fun isInstagramUrl(url: String): Boolean =
+        Uri.parse(url).host.orEmpty().contains("instagram.com")
 
-    /**
-     * Instagram's normal post page is a client-rendered shell and doesn't include
-     * `og:video` in the raw HTML for Reels. Its embed page (meant for embedding
-     * posts on third-party sites, so it stays server-rendered) does include the
-     * direct video URL, so try that first before falling back to plain og:video.
-     */
-    private fun fetchInstagramVideoUrl(postUrl: String): String? {
+    suspend fun downloadVideo(context: Context, postUrl: String, instagramCookie: String? = null): Uri =
+        withContext(Dispatchers.IO) {
+            if (isYouTubeUrl(postUrl)) {
+                error("YouTube links aren't supported. Try Instagram, TikTok, X/Twitter, Facebook, Reddit, or Vimeo instead.")
+            }
+            val videoUrl = if (isInstagramUrl(postUrl)) {
+                fetchInstagramVideoUrl(postUrl, instagramCookie)
+            } else {
+                fetchOgVideoUrl(postUrl, null)
+            } ?: error("Couldn't find a video on that link. The post may be private, expired, deleted, or not a video.")
+            downloadToCache(context, videoUrl)
+        }
+
+    private fun fetchInstagramVideoUrl(postUrl: String, cookie: String?): String? {
+        val shortcode = extractInstagramShortcode(postUrl)
+
+        if (cookie != null && shortcode != null) {
+            fetchInstagramApiVideoUrl(shortcode, cookie)?.let { return it }
+        }
+
+        // Fallbacks below rarely succeed without a session (Instagram serves an
+        // empty client-rendered shell to unauthenticated requests) but are cheap
+        // to try in case that ever changes for a given post.
         val embedUrl = toInstagramEmbedUrl(postUrl)
         if (embedUrl != null) {
-            fetchHtml(embedUrl)?.let { html ->
-                extractFirst(html, Regex("\"video_url\":\"([^\"]+)\""))
-                    ?.let { return unescape(it) }
+            fetchHtml(embedUrl, cookie)?.let { html ->
+                extractFirst(html, Regex("\"video_url\":\"([^\"]+)\""))?.let { return unescape(it) }
                 extractOgVideo(html)?.let { return it }
             }
         }
-        return fetchOgVideoUrl(postUrl)
+        return fetchOgVideoUrl(postUrl, cookie)
     }
+
+    /** Instagram's authenticated private media-info endpoint; requires a logged-in session cookie. */
+    private fun fetchInstagramApiVideoUrl(shortcode: String, cookie: String): String? {
+        val request = Request.Builder()
+            .url("https://www.instagram.com/api/v1/media/$shortcode/info/")
+            .header("User-Agent", browserUserAgent)
+            .header("x-ig-app-id", instagramAppId)
+            .header("Cookie", cookie)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val body = response.body?.string() ?: return null
+            return runCatching {
+                val item = JSONObject(body).getJSONArray("items").getJSONObject(0)
+                val versions = item.getJSONArray("video_versions")
+                versions.getJSONObject(0).getString("url")
+            }.getOrNull()
+        }
+    }
+
+    private fun extractInstagramShortcode(url: String): String? =
+        Regex("instagram\\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)").find(url)?.groupValues?.get(1)
 
     private fun toInstagramEmbedUrl(postUrl: String): String? {
-        val match = Regex("instagram\\.com/(p|reel|tv)/([A-Za-z0-9_-]+)").find(postUrl) ?: return null
+        val match = Regex("instagram\\.com/(p|reel|reels|tv)/([A-Za-z0-9_-]+)").find(postUrl) ?: return null
         val (type, shortcode) = match.destructured
-        return "https://www.instagram.com/$type/$shortcode/embed/"
+        val embedType = if (type == "reels") "reel" else type
+        return "https://www.instagram.com/$embedType/$shortcode/embed/"
     }
 
-    private fun fetchOgVideoUrl(pageUrl: String): String? =
-        fetchHtml(pageUrl)?.let { extractOgVideo(it) }
+    private fun fetchOgVideoUrl(pageUrl: String, cookie: String?): String? =
+        fetchHtml(pageUrl, cookie)?.let { extractOgVideo(it) }
 
     private fun extractOgVideo(html: String): String? {
         val match = extractFirst(html, Regex("property=\"og:video(?::secure_url)?\"\\s+content=\"([^\"]+)\""))
@@ -96,12 +134,10 @@ class LinkVideoResolver {
     private fun unescape(url: String): String =
         Html.fromHtml(url, Html.FROM_HTML_MODE_LEGACY).toString().replace("\\/", "/")
 
-    private fun fetchHtml(url: String): String? {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", browserUserAgent)
-            .build()
-        client.newCall(request).execute().use { response ->
+    private fun fetchHtml(url: String, cookie: String?): String? {
+        val builder = Request.Builder().url(url).header("User-Agent", browserUserAgent)
+        if (cookie != null) builder.header("Cookie", cookie)
+        client.newCall(builder.build()).execute().use { response ->
             if (!response.isSuccessful) return null
             return response.body?.string()
         }
@@ -111,6 +147,7 @@ class LinkVideoResolver {
         val request = Request.Builder()
             .url(videoUrl)
             .header("User-Agent", browserUserAgent)
+            .header("Referer", "https://www.instagram.com/")
             .build()
 
         val file = File(context.cacheDir, "shared_video_${System.currentTimeMillis()}.mp4")

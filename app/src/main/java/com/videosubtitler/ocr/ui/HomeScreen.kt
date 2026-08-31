@@ -24,7 +24,13 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun HomeScreen(onPickVideo: () -> Unit, onSubmitLink: (String) -> Unit, errorMessage: String? = null) {
+fun HomeScreen(
+    onPickVideo: () -> Unit,
+    onSubmitLink: (String) -> Unit,
+    hasInstagramSession: Boolean = false,
+    onLogOutOfInstagram: () -> Unit = {},
+    errorMessage: String? = null,
+) {
     val clipboardManager = LocalClipboardManager.current
     var linkText by remember { mutableStateOf("") }
 
@@ -73,6 +79,12 @@ fun HomeScreen(onPickVideo: () -> Unit, onSubmitLink: (String) -> Unit, errorMes
                     enabled = linkText.isNotBlank(),
                 ) {
                     Text("Fetch video")
+                }
+            }
+
+            if (hasInstagramSession) {
+                OutlinedButton(onClick = onLogOutOfInstagram, modifier = Modifier.padding(top = 16.dp)) {
+                    Text("Log out of Instagram")
                 }
             }
         }

@@ -12,6 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.videosubtitler.ocr.ui.FetchingScreen
 import com.videosubtitler.ocr.ui.HomeScreen
+import com.videosubtitler.ocr.ui.InstagramConsentScreen
+import com.videosubtitler.ocr.ui.InstagramLoginScreen
 import com.videosubtitler.ocr.ui.ProcessingScreen
 import com.videosubtitler.ocr.ui.ResultScreen
 import com.videosubtitler.ocr.viewmodel.TranscriptionViewModel
@@ -34,10 +36,21 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
+            val hasInstagramSession by viewModel.hasInstagramSession.collectAsStateWithLifecycle()
             when (val current = state) {
                 is UiState.Idle -> HomeScreen(
                     onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) },
                     onSubmitLink = { viewModel.processSharedText(it) },
+                    hasInstagramSession = hasInstagramSession,
+                    onLogOutOfInstagram = { viewModel.logOutOfInstagram() },
+                )
+                is UiState.InstagramConsentRequired -> InstagramConsentScreen(
+                    onAccept = { viewModel.onInstagramConsentAccepted() },
+                    onCancel = { viewModel.onInstagramConsentDeclined() },
+                )
+                is UiState.InstagramLoggingIn -> InstagramLoginScreen(
+                    onLoggedIn = { cookie -> viewModel.onInstagramLoggedIn(cookie) },
+                    onCancel = { viewModel.onInstagramLoginCancelled() },
                 )
                 is UiState.Fetching -> FetchingScreen(message = current.message)
                 is UiState.Processing -> ProcessingScreen(processed = current.processed, total = current.total)
@@ -49,6 +62,8 @@ class MainActivity : ComponentActivity() {
                 is UiState.Error -> HomeScreen(
                     onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) },
                     onSubmitLink = { viewModel.processSharedText(it) },
+                    hasInstagramSession = hasInstagramSession,
+                    onLogOutOfInstagram = { viewModel.logOutOfInstagram() },
                     errorMessage = current.message,
                 )
             }
