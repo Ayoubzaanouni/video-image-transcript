@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,15 +29,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.delay
 
 private const val INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/"
 
-// A normal mobile Chrome UA — Instagram blank-pages the default WebView UA (it
-// contains a "; wv" marker identifying it as an embedded WebView) instead of
-// serving the real login page.
-private const val DESKTOP_LIKE_MOBILE_UA =
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/124.0.0.0 Mobile Safari/537.36"
+// Instagram's modern React app fingerprints the browser and refuses to render
+// (blank splash screen) inside a WebView even with a normal Chrome UA. Presenting
+// as a very old/basic browser makes Instagram fall back to serving its legacy,
+// simple, server-rendered login form instead of the JS app — this trick is used
+// by several existing open-source downloader apps (see VidSnap's LoginFragment).
+private const val LEGACY_BROWSER_UA =
+    "Mozilla/5.0 (Linux; U; Android 2.2; en-gb; Build/FRF50) AppleWebKit/533.1 " +
+        "(KHTML, like Gecko) Version/4.0 Mobile Safari/533.1"
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -45,6 +49,24 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
     var isLoading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var reloadTrigger by remember { mutableStateOf(0) }
+    var pageFinishedTick by remember { mutableStateOf(0) }
+    var loggedIn by remember { mutableStateOf(false) }
+
+    // Cookies (in particular the session cookie) can be set slightly after the
+    // page itself finishes loading, so poll for a few seconds instead of a
+    // one-shot check right on page-finish.
+    LaunchedEffect(pageFinishedTick) {
+        if (pageFinishedTick == 0 || loggedIn) return@LaunchedEffect
+        repeat(6) {
+            val cookie = CookieManager.getInstance().getCookie("https://www.instagram.com")
+            if (cookie != null && cookie.contains("sessionid=")) {
+                loggedIn = true
+                currentOnLoggedIn.value(cookie)
+                return@LaunchedEffect
+            }
+            delay(1000)
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -72,7 +94,7 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
                         settings.domStorageEnabled = true
                         settings.useWideViewPort = true
                         settings.loadWithOverviewMode = true
-                        settings.userAgentString = DESKTOP_LIKE_MOBILE_UA
+                        settings.userAgentString = LEGACY_BROWSER_UA
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
                         webViewClient = object : WebViewClient() {
@@ -85,10 +107,7 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
                             override fun onPageFinished(view: WebView, url: String?) {
                                 super.onPageFinished(view, url)
                                 isLoading = false
-                                val cookie = CookieManager.getInstance().getCookie("https://www.instagram.com")
-                                if (cookie != null && cookie.contains("sessionid=")) {
-                                    currentOnLoggedIn.value(cookie)
-                                }
+                                pageFinishedTick++
                             }
 
                             override fun onReceivedError(
@@ -103,12 +122,12 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
                                 }
                             }
                         }
-                        loadUrl(INSTAGRAM_LOGIN_URL)
+                        loadUrl(INSTAGRAM_LOGIN_URL, mapOf("X-Requested-With" to "com.android.chrome"))
                     }
                 },
                 update = { webView ->
                     if (reloadTrigger > 0) {
-                        webView.loadUrl(INSTAGRAM_LOGIN_URL)
+                        webView.loadUrl(INSTAGRAM_LOGIN_URL, mapOf("X-Requested-With" to "com.android.chrome"))
                     }
                 },
             )
