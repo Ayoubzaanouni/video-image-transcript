@@ -10,10 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.videosubtitler.ocr.ui.FetchingScreen
 import com.videosubtitler.ocr.ui.HomeScreen
-import com.videosubtitler.ocr.ui.InstagramConsentScreen
-import com.videosubtitler.ocr.ui.InstagramLoginScreen
 import com.videosubtitler.ocr.ui.ProcessingScreen
 import com.videosubtitler.ocr.ui.ResultScreen
 import com.videosubtitler.ocr.viewmodel.TranscriptionViewModel
@@ -36,23 +33,8 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
-            val hasInstagramSession by viewModel.hasInstagramSession.collectAsStateWithLifecycle()
             when (val current = state) {
-                is UiState.Idle -> HomeScreen(
-                    onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) },
-                    onSubmitLink = { viewModel.processSharedText(it) },
-                    hasInstagramSession = hasInstagramSession,
-                    onLogOutOfInstagram = { viewModel.logOutOfInstagram() },
-                )
-                is UiState.InstagramConsentRequired -> InstagramConsentScreen(
-                    onAccept = { viewModel.onInstagramConsentAccepted() },
-                    onCancel = { viewModel.onInstagramConsentDeclined() },
-                )
-                is UiState.InstagramLoggingIn -> InstagramLoginScreen(
-                    onLoggedIn = { cookie -> viewModel.onInstagramLoggedIn(cookie) },
-                    onCancel = { viewModel.onInstagramLoginCancelled() },
-                )
-                is UiState.Fetching -> FetchingScreen(message = current.message)
+                is UiState.Idle -> HomeScreen(onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) })
                 is UiState.Processing -> ProcessingScreen(processed = current.processed, total = current.total)
                 is UiState.Result -> ResultScreen(
                     videoUri = current.videoUri,
@@ -61,9 +43,6 @@ class MainActivity : ComponentActivity() {
                 )
                 is UiState.Error -> HomeScreen(
                     onPickVideo = { pickVideoLauncher.launch(arrayOf("video/*")) },
-                    onSubmitLink = { viewModel.processSharedText(it) },
-                    hasInstagramSession = hasInstagramSession,
-                    onLogOutOfInstagram = { viewModel.logOutOfInstagram() },
                     errorMessage = current.message,
                 )
             }
@@ -77,21 +56,14 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(intent: Intent) {
         if (intent.action != Intent.ACTION_SEND) return
+        if (intent.type?.startsWith("video/") != true) return
 
-        when {
-            intent.type?.startsWith("video/") == true -> {
-                val sharedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
-                }
-                sharedUri?.let { viewModel.processVideo(it) }
-            }
-            intent.type == "text/plain" -> {
-                val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-                sharedText?.let { viewModel.processSharedText(it) }
-            }
+        val sharedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
         }
+        sharedUri?.let { viewModel.processVideo(it) }
     }
 }

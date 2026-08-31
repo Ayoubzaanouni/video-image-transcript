@@ -63,12 +63,6 @@ dependencies {
     // On-device OCR
     implementation("com.google.mlkit:text-recognition:16.0.1")
 
-    // Fetching public post pages / downloading shared video links
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    // Encrypted local storage for the optional Instagram session cookie
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-
     // Video playback + subtitle rendering
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
