@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
     var reloadTrigger by remember { mutableStateOf(0) }
     var pageFinishedTick by remember { mutableStateOf(0) }
     var loggedIn by remember { mutableStateOf(false) }
+    var diagnostics by remember { mutableStateOf("") }
 
     // Cookies (in particular the session cookie) can be set slightly after the
     // page itself finishes loading, so poll for a few seconds instead of a
@@ -108,6 +110,22 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
                                 super.onPageFinished(view, url)
                                 isLoading = false
                                 pageFinishedTick++
+
+                                // Diagnostics: what did the page actually load, since a
+                                // "blank gray" screen could mean several different things.
+                                view.evaluateJavascript(
+                                    "(function(){" +
+                                        "var b=document.body;" +
+                                        "return JSON.stringify({" +
+                                        "url: location.href," +
+                                        "title: document.title," +
+                                        "bodyLen: b ? b.innerHTML.length : -1," +
+                                        "text: b ? b.innerText.slice(0,120) : ''" +
+                                        "});" +
+                                        "})();",
+                                ) { result ->
+                                    diagnostics = result ?: "(no result)"
+                                }
                             }
 
                             override fun onReceivedError(
@@ -152,6 +170,16 @@ fun InstagramLoginScreen(onLoggedIn: (String) -> Unit, onCancel: () -> Unit) {
                     ) {
                         Text("Retry")
                     }
+                }
+            }
+
+            if (diagnostics.isNotEmpty()) {
+                Surface(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    Text(
+                        text = "Debug: $diagnostics",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(8.dp),
+                    )
                 }
             }
         }
